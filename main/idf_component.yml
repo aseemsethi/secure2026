@@ -1,0 +1,3 @@
+dependencies:
+  nixy4/u8g2: "^0.1.4"
+  espressif/network_provisioning: "^1.0.0"
