@@ -44,10 +44,15 @@
 #include "u8g2_demo.h"
 
 void wifi_eraseconfig(void);
+void displayString(char *str);
 char connection_str[64];
+char topic[CONFIG_SERVER_TOPIC_LENGTH] = {0};
 
 static const char *TAG = "U8G2";
 u8g2_t u8g2;
+static volatile bool station_connected;
+static bool station_reconnect_enabled;
+static TaskHandle_t reconnect_task_handle;
 
 typedef struct {
     char *topic;
@@ -143,6 +148,31 @@ static esp_err_t send_ntfy_notification(const char *topic, const char *message)
     return ESP_OK;
 }
 
+static void wifi_reconnect_task(void *argument)
+{
+    esp_err_t ret;
+    while (station_reconnect_enabled) {
+        if (!station_connected) {
+            ret = send_ntfy_notification(topic, "WiFi reconnecting");
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Could not queue WiFi notification: %s", esp_err_to_name(ret));
+            }
+            displayString("Wi-Fi reconnecting..");
+            ret = esp_wifi_connect();
+            if (ret != ESP_OK && ret != ESP_ERR_WIFI_CONN) {
+                ESP_LOGW(TAG, "Wi-Fi reconnect attempt failed: %s", esp_err_to_name(ret));
+            } else {
+                ESP_LOGI(TAG, "Wi-Fi reconnect attempt started");
+                displayString("Wi-Fi reconnecting..");
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+
+    reconnect_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
 /* I2C Configuration (configurable via menuconfig) */
 #define I2C_MASTER_NUM    I2C_NUM_0                        /*!< I2C master port number */
 #define I2C_MASTER_SDA_IO 26
@@ -184,14 +214,19 @@ static void provisioning_event_handler(void *arg, esp_event_base_t event_base,
             break;
         }
     } else if (event_base == WIFI_EVENT) {
-        if (event_id == WIFI_EVENT_STA_START || event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (event_id == WIFI_EVENT_STA_START) {
             esp_err_t ret = esp_wifi_connect();
             if (ret != ESP_OK) {
                 ESP_LOGW(TAG, "Wi-Fi station connect deferred: %s", esp_err_to_name(ret));
                 u8g2_DrawStr(&u8g2, 0, 32, "Defer connect to Wi-Fi");
             }
+        } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            station_connected = false;
+            ESP_LOGW(TAG, "Wi-Fi disconnected; retry task will reconnect until successful");
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        station_connected = true;
+        displayString("Wi-Fi connected");
         const ip_event_got_ip_t *got_ip = (const ip_event_got_ip_t *)event_data;
         wifi_config_t wifi_config = {0};
         esp_err_t ret = esp_wifi_get_config(WIFI_IF_STA, &wifi_config);
@@ -210,7 +245,6 @@ static void provisioning_event_handler(void *arg, esp_event_base_t event_base,
             snprintf(connection_str, sizeof(connection_str), "%s IP: " IPSTR,
                      ssid_str, IP2STR(&got_ip->ip_info.ip));
 
-            char topic[CONFIG_SERVER_TOPIC_LENGTH] = {0};
             if (get_config_topic(topic, sizeof(topic)) == ESP_OK && topic[0] != '\0') {
                 ret = send_ntfy_notification(topic, "WiFi connected");
                 if (ret != ESP_OK) {
@@ -263,9 +297,15 @@ static void start_wifi_provisioning(void)
 
     if (provisioned) {
         ESP_LOGI(TAG, "Wi-Fi credentials found in flash; starting station mode");
+        station_reconnect_enabled = true;
         ESP_ERROR_CHECK(network_prov_mgr_deinit());
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_start());
+        BaseType_t task_result = xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 3072,
+                                             NULL, 5, &reconnect_task_handle);
+        if (task_result != pdPASS) {
+            ESP_ERROR_CHECK(ESP_ERR_NO_MEM);
+        }
         return;
     }
 
