@@ -457,25 +457,6 @@ static uint8_t u8x8_gpio_delay_cb(u8x8_t *u8x8, uint8_t msg,
     return 1;
 }
 
-/**
- * @brief Display the current demo cycle number on the display screen.
- *
- * @param u8g2 Pointer to the U8G2 display structure.
- * @param demo_cycle The current demo cycle number to display.
- */
-static void show_demo_cycle(u8g2_t* u8g2, int demo_cycle)
-{
-    u8g2_ClearBuffer(u8g2);
-    u8g2_SetFont(u8g2, u8g2_font_ncenB08_tr);
-    u8g2_DrawStr(u8g2, 25, 25, "Demo Cycle");
-    u8g2_SetFont(u8g2, u8g2_font_ncenB14_tr);
-    char cycle_str[16];
-    snprintf(cycle_str, sizeof(cycle_str), "%d", demo_cycle);
-    u8g2_DrawStr(u8g2, 55, 45, cycle_str);
-    u8g2_SendBuffer(u8g2);
-    vTaskDelay(pdMS_TO_TICKS(2000));    /* delay for showing static display */
-}
-
 void displayString(char* str)
 {
     xSemaphoreTakeRecursive(display_mutex, portMAX_DELAY);
@@ -492,21 +473,16 @@ void displayString(char* str)
 /**
  * @brief Main application entry point
  *
- * This function initializes the U8G2 library, configures the display controller,
- * and runs a continuous demo loop showcasing various U8G2 features.
- *
- * The demo includes:
- * - Text display with different fonts
- * - Geometric shapes (rectangles, circles, triangles, lines)
- * - Pixel manipulation
- * - Animated progress bar
- * - Bouncing ball animation
- * - Bitmap display
+ * Brings up the I2C bus and SSD1306 display, then starts, in order:
+ * - the GPIO0 hold-to-erase watcher
+ * - Wi-Fi provisioning, or station mode when credentials are already stored
+ * - the configuration web server
+ * - the BLE door sensor monitor
  */
 void app_main(void)
 {
     esp_log_level_set("BLE_SENSOR", ESP_LOG_DEBUG);
-    ESP_LOGI(TAG, "Starting U8G2 display demo program (menuconfig based configuration)");
+    ESP_LOGI(TAG, "Starting Security Dev (menuconfig based configuration)");
     ESP_LOGI(TAG, "I2C Configuration: SDA=GPIO%d, SCL=GPIO%d, Freq=%dHz, Timeout=%dms",
              I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO, I2C_FREQ_HZ, I2C_TIMEOUT_MS);
     ESP_LOGI(TAG, "Display Configuration: Address=0x%02X",
