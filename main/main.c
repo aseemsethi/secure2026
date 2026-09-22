@@ -1,31 +1,9 @@
-
-
-
-
-
-
-/*
- * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
-
-/**
- * @file i2c_u8g2_main.c
- * @brief I2C U8G2 Display Demo using ESP-IDF I2C Master Driver
- *
- * This example demonstrates how to use the U8G2 graphics library with
- * SSD1306 display over I2C interface using the new ESP-IDF I2C master driver.
- *
- * The demo showcases various U8G2 features including text display, geometric shapes,
- * pixel manipulation, progress bars, animations, and bitmap display.
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -41,7 +19,6 @@
 #include "http_server.h"
 #include "sdkconfig.h"
 #include "u8g2.h"
-#include "u8g2_demo.h"
 
 void wifi_eraseconfig(void);
 void displayString(char *str);
@@ -53,6 +30,7 @@ u8g2_t u8g2;
 static volatile bool station_connected;
 static bool station_reconnect_enabled;
 static TaskHandle_t reconnect_task_handle;
+static SemaphoreHandle_t display_mutex;
 
 typedef struct {
     char *topic;
@@ -188,9 +166,28 @@ static void wifi_reconnect_task(void *argument)
 static i2c_master_bus_handle_t i2c_bus_handle = NULL;   /*!< I2C master bus handle */
 static i2c_master_dev_handle_t display_dev_handle = NULL;  /*!< Display device handle */
 
+static void security_text_display(u8g2_t *display)
+{
+    ESP_LOGI(TAG, "Security Text Display");
+
+    xSemaphoreTakeRecursive(display_mutex, portMAX_DELAY);
+    u8g2_ClearBuffer(display);
+    u8g2_SetFont(display, u8g2_font_ncenB12_tr);
+    u8g2_DrawStr(display, 0, 16, "Security Dev");
+    u8g2_SetFont(display, u8g2_font_ncenB08_tr);
+    u8g2_DrawStr(display, 0, 32, "aseemsethi@yahoo.com");
+    u8g2_SetFont(display, u8g2_font_5x7_tr);
+    u8g2_DrawStr(display, 0, 44, "Sept 2026");
+    u8g2_DrawStr(display, 0, 54, "Bengaluru, India");
+    u8g2_SendBuffer(display);
+    xSemaphoreGiveRecursive(display_mutex);
+    vTaskDelay(pdMS_TO_TICKS(4000));
+}
+
 static void provisioning_event_handler(void *arg, esp_event_base_t event_base,
                                        int32_t event_id, void *event_data)
 {
+    xSemaphoreTakeRecursive(display_mutex, portMAX_DELAY);
     u8g2_ClearBuffer(&u8g2);
     u8g2_SetFont(&u8g2, u8g2_font_ncenB08_tr);
     if (event_base == NETWORK_PROV_EVENT) {
@@ -259,6 +256,7 @@ static void provisioning_event_handler(void *arg, esp_event_base_t event_base,
         u8g2_DrawStr(&u8g2, 0, 32, connection_str);
     }
     u8g2_SendBuffer(&u8g2);
+    xSemaphoreGiveRecursive(display_mutex);
 }
 
 static void start_wifi_provisioning(void)
@@ -473,12 +471,14 @@ static void show_demo_cycle(u8g2_t* u8g2, int demo_cycle)
 
 void displayString(char* str)
 {
+    xSemaphoreTakeRecursive(display_mutex, portMAX_DELAY);
     u8g2_ClearBuffer(&u8g2);
     u8g2_SetFont(&u8g2, u8g2_font_ncenB08_tr);
     u8g2_DrawStr(&u8g2, 0, 16, "Security Dev");
     u8g2_DrawStr(&u8g2, 0, 32, connection_str);
     u8g2_DrawStr(&u8g2, 0, 44, str);
     u8g2_SendBuffer(&u8g2);
+    xSemaphoreGiveRecursive(display_mutex);
 }
 
 /**
@@ -502,6 +502,9 @@ void app_main(void)
              I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO, I2C_FREQ_HZ, I2C_TIMEOUT_MS);
     ESP_LOGI(TAG, "Display Configuration: Address=0x%02X",
              I2C_DISPLAY_ADDRESS);
+
+    display_mutex = xSemaphoreCreateRecursiveMutex();
+    ESP_ERROR_CHECK(display_mutex != NULL ? ESP_OK : ESP_ERR_NO_MEM);
 
     i2c_master_bus_config_t bus_config = {
         .i2c_port = I2C_MASTER_NUM,
@@ -536,20 +539,7 @@ void app_main(void)
     u8g2_SetPowerSave(&u8g2, 0);  /* Wake up display */
     ESP_LOGI(TAG, "Display initialization completed");
 
-    /* Main demo loop - runs continuously */
-    // int demo_cycle = 0;
-    // while (1) {
-        // ESP_LOGI(TAG, "Demo cycle: %d", ++demo_cycle);
-        // security_text_display(&u8g2);
-        // demo_shapes(&u8g2);
-        // demo_pixels(&u8g2);
-        // demo_progress_bar(&u8g2);
-        // demo_animation(&u8g2);
-        // demo_bitmap(&u8g2);
-        // show_demo_cycle(&u8g2, demo_cycle);
-        //vTaskDelay(pdMS_TO_TICKS(1000));
-    // }
-        printf("\n Setting up boot button");
+    printf("\n Setting up boot button");
     // file to setup an INTR to clear WiFi NVS storage
     // Boot button is connected to GPIO0 and pressing that, erases the WiFi storage
     // data that contains username/password
