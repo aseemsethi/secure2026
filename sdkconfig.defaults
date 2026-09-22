@@ -1,0 +1,23 @@
+# NimBLE in observer-only mode, for the IM24-BLE door sensors.
+# Bluedroid is not an option here: the app partition is 1500K and the binary
+# is already ~1.08M, so only NimBLE's smaller footprint fits.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=n
+CONFIG_BTDM_CTRL_MODE_BTDM=n
+
+# We only listen to advertisements, so observer is the role we actually use.
+#
+# Central has to stay on regardless: on ESP32, esp_nimble_cfg.h hardcodes
+# MYNEWT_VAL_BLE_HOST_BASED_PRIVACY to 1 whatever Kconfig says, which compiles
+# ble_hs_resolv.c, which calls ble_sm_alg_encrypt from the security manager.
+# That symbol only exists when a connectable role is enabled, so an
+# observer-only build fails to link on this target.
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+
+# Wi-Fi and BLE share the 2.4GHz radio.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y

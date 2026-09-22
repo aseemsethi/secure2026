@@ -447,3 +447,37 @@ esp_err_t get_config_topic(char *topic, size_t topic_size)
     nvs_close(handle);
     return ret;
 }
+
+esp_err_t get_config_bt_sensor(int index, char *address, size_t address_size,
+                               char *name, size_t name_size)
+{
+    if (index < 0 || index >= CONFIG_SERVER_MAX_BT_ADDRESSES ||
+        address == NULL || address_size == 0 || name == NULL || name_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    address[0] = '\0';
+    name[0] = '\0';
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open("device_cfg", NVS_READONLY, &handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    char key[12];
+    snprintf(key, sizeof(key), "bt%d", index);
+    size_t length = address_size;
+    ret = nvs_get_str(handle, key, address, &length);
+
+    if (ret == ESP_OK) {
+        snprintf(key, sizeof(key), "bt_name%d", index);
+        length = name_size;
+        if (nvs_get_str(handle, key, name, &length) != ESP_OK) {
+            name[0] = '\0';
+        }
+    }
+
+    nvs_close(handle);
+    return ret;
+}

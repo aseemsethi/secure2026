@@ -17,6 +17,7 @@
 #include "network_provisioning/manager.h"
 #include "network_provisioning/scheme_softap.h"
 #include "http_server.h"
+#include "ble_sensors.h"
 #include "sdkconfig.h"
 #include "u8g2.h"
 
@@ -98,7 +99,8 @@ cleanup:
     vTaskDelete(NULL);
 }
 
-static esp_err_t send_ntfy_notification(const char *topic, const char *message)
+/* Not static: ble_sensors.c reports door events through the same channel. */
+esp_err_t send_ntfy_notification(const char *topic, const char *message)
 {
     if (topic == NULL || message == NULL || topic[0] == '\0' || message[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
@@ -503,6 +505,7 @@ void displayString(char* str)
  */
 void app_main(void)
 {
+    esp_log_level_set("BLE_SENSOR", ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "Starting U8G2 display demo program (menuconfig based configuration)");
     ESP_LOGI(TAG, "I2C Configuration: SDA=GPIO%d, SCL=GPIO%d, Freq=%dHz, Timeout=%dms",
              I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO, I2C_FREQ_HZ, I2C_TIMEOUT_MS);
@@ -555,6 +558,12 @@ void app_main(void)
     security_text_display(&u8g2);
     start_wifi_provisioning();
     ESP_ERROR_CHECK(start_configuration_server());
+
+    /* Door sensors are secondary: log a failure rather than halting the device. */
+    esp_err_t ble_ret = start_ble_sensor_monitor();
+    if (ble_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Could not start BLE sensor monitor: %s", esp_err_to_name(ble_ret));
+    }
     while(1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
