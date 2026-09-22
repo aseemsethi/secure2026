@@ -30,6 +30,9 @@ typedef struct {
 
 static device_settings_t settings;
 
+/* Form bodies are heap allocated: handlers run on the httpd task stack. */
+#define FORM_BODY_SIZE 2048
+
 static void load_settings(void)
 {
     nvs_handle_t handle;
@@ -96,6 +99,13 @@ static esp_err_t save_settings(void)
     displayString("Save Config..");
     return ret;
 }
+
+/*
+ * Worst-case expansion for html_escape: '"' becomes "&quot;", six bytes per
+ * character. A source buffer of SIZE holds at most SIZE - 1 characters, so
+ * (SIZE - 1) * 6 + 1 bytes are needed, which SIZE * 6 always covers.
+ */
+#define HTML_ESCAPED_SIZE(size) ((size) * 6)
 
 static void html_escape(char *destination, size_t destination_size, const char *source)
 {
@@ -231,14 +241,14 @@ static esp_err_t receive_body(httpd_req_t *request, char *body, size_t body_size
 
 static void send_page(httpd_req_t *request, const char *message)
 {
-    char name[CONFIG_SERVER_TEXT_LENGTH * 4];
-    char location[CONFIG_SERVER_TEXT_LENGTH * 4];
-    char phone[CONFIG_SERVER_PHONE_LENGTH * 4];
-    char topic[CONFIG_SERVER_TOPIC_LENGTH * 4];
-    char escaped_address[CONFIG_SERVER_BT_ADDRESS_LENGTH * 4];
-    char escaped_bluetooth_name[CONFIG_SERVER_BT_NAME_LENGTH * 4];
+    char name[HTML_ESCAPED_SIZE(CONFIG_SERVER_TEXT_LENGTH)];
+    char location[HTML_ESCAPED_SIZE(CONFIG_SERVER_TEXT_LENGTH)];
+    char phone[HTML_ESCAPED_SIZE(CONFIG_SERVER_PHONE_LENGTH)];
+    char topic[HTML_ESCAPED_SIZE(CONFIG_SERVER_TOPIC_LENGTH)];
+    char escaped_address[HTML_ESCAPED_SIZE(CONFIG_SERVER_BT_ADDRESS_LENGTH)];
+    char escaped_bluetooth_name[HTML_ESCAPED_SIZE(CONFIG_SERVER_BT_NAME_LENGTH)];
     char ssid[33] = {0};
-    char escaped_ssid[sizeof(ssid) * 4];
+    char escaped_ssid[HTML_ESCAPED_SIZE(sizeof(ssid))];
     char ip_address[16] = "unavailable";
     wifi_config_t wifi_config = {0};
 
@@ -302,8 +312,14 @@ static esp_err_t root_handler(httpd_req_t *request)
 
 static esp_err_t save_handler(httpd_req_t *request)
 {
-    char body[2048];
-    if (receive_body(request, body, sizeof(body)) != ESP_OK) {
+    char *body = malloc(FORM_BODY_SIZE);
+    if (body == NULL) {
+        httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    if (receive_body(request, body, FORM_BODY_SIZE) != ESP_OK) {
+        free(body);
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid form data");
         return ESP_FAIL;
     }
@@ -322,6 +338,7 @@ static esp_err_t save_handler(httpd_req_t *request)
 
     decode_form_value(body, "topic", value, sizeof(value));
     if (!is_alphanumeric_value(value, 3, CONFIG_SERVER_TOPIC_LENGTH - 1)) {
+        free(body);
         send_page(request, "Topic must contain 3 to 12 alphanumeric characters.");
         return ESP_OK;
     }
@@ -338,6 +355,7 @@ static esp_err_t save_handler(httpd_req_t *request)
         } else if (normalize_bluetooth_address(value, normalized)) {
             strcpy(settings.bluetooth_addresses[index], normalized);
         } else {
+            free(body);
             send_page(request, "Invalid Bluetooth address. Use 12 hex digits, optionally separated by ':' or '-'.");
             return ESP_OK;
         }
@@ -347,6 +365,8 @@ static esp_err_t save_handler(httpd_req_t *request)
         strncpy(settings.bluetooth_names[index], value, sizeof(settings.bluetooth_names[index]) - 1);
         settings.bluetooth_names[index][sizeof(settings.bluetooth_names[index]) - 1] = '\0';
     }
+
+    free(body);
 
     esp_err_t ret = save_settings();
     if (ret != ESP_OK) {
@@ -377,6 +397,7 @@ static void configuration_server_task(void *argument)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.max_open_sockets = 4;
+    config.stack_size = 8192;  /* 4096 default overflows in the form handlers */
     while (httpd_start(&server_handle, &config) != ESP_OK) {
         ESP_LOGW(TAG, "Port 80 is still busy; retrying HTTP server startup");
         vTaskDelay(pdMS_TO_TICKS(1000));
