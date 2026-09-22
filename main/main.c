@@ -22,7 +22,9 @@
 
 void wifi_eraseconfig(void);
 void displayString(char *str);
-char connection_str[64];
+/* Shown on separate lines: the joined SSID and IP do not fit on one 128px row. */
+char connection_ssid[33];
+char connection_ip[24];
 char topic[CONFIG_SERVER_TOPIC_LENGTH] = {0};
 
 static const char *TAG = "U8G2";
@@ -238,9 +240,11 @@ static void provisioning_event_handler(void *arg, esp_event_base_t event_base,
         char ssid_str[33] = {0};
         memcpy(ssid_str, wifi_config.sta.ssid, sizeof(ssid_str) - 1);
 
+        snprintf(connection_ssid, sizeof(connection_ssid), "%s", ssid_str);
+
         if (got_ip != NULL) {
-            snprintf(connection_str, sizeof(connection_str), "%s IP: " IPSTR,
-                     ssid_str, IP2STR(&got_ip->ip_info.ip));
+            snprintf(connection_ip, sizeof(connection_ip), "IP: " IPSTR,
+                     IP2STR(&got_ip->ip_info.ip));
 
             if (get_config_topic(topic, sizeof(topic)) == ESP_OK && topic[0] != '\0') {
                 ret = send_ntfy_notification(topic, "WiFi connected");
@@ -251,9 +255,10 @@ static void provisioning_event_handler(void *arg, esp_event_base_t event_base,
                 ESP_LOGW(TAG, "No ntfy Topic configured; WiFi notification skipped");
             }
         } else {
-            snprintf(connection_str, sizeof(connection_str), "%s", ssid_str);
+            connection_ip[0] = '\0';
         }
-        u8g2_DrawStr(&u8g2, 0, 32, connection_str);
+        u8g2_DrawStr(&u8g2, 0, 28, connection_ssid);
+        u8g2_DrawStr(&u8g2, 0, 40, connection_ip);
     }
     u8g2_SendBuffer(&u8g2);
     xSemaphoreGiveRecursive(display_mutex);
@@ -475,8 +480,9 @@ void displayString(char* str)
     u8g2_ClearBuffer(&u8g2);
     u8g2_SetFont(&u8g2, u8g2_font_ncenB08_tr);
     u8g2_DrawStr(&u8g2, 0, 16, "Security Dev");
-    u8g2_DrawStr(&u8g2, 0, 32, connection_str);
-    u8g2_DrawStr(&u8g2, 0, 44, str);
+    u8g2_DrawStr(&u8g2, 0, 28, connection_ssid);
+    u8g2_DrawStr(&u8g2, 0, 40, connection_ip);
+    u8g2_DrawStr(&u8g2, 0, 56, str);
     u8g2_SendBuffer(&u8g2);
     xSemaphoreGiveRecursive(display_mutex);
 }
