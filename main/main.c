@@ -172,7 +172,7 @@ static i2c_master_dev_handle_t display_dev_handle = NULL;  /*!< Display device h
 
 static void security_text_display(u8g2_t *display)
 {
-    ESP_LOGI(TAG, "Security Text Display");
+    ESP_LOGI(TAG, "Security Text Display ");
 
     xSemaphoreTakeRecursive(display_mutex, portMAX_DELAY);
     u8g2_ClearBuffer(display);

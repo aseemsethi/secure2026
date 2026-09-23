@@ -21,3 +21,12 @@ CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 
 # Wi-Fi and BLE share the 2.4GHz radio.
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+# The controller keeps its own duplicate cache. Filtering by device address
+# alone reports each sensor once and suppresses everything after it, which
+# swallows door state changes. Filter on address AND data so any payload change
+# is always reported.
+CONFIG_BTDM_SCAN_DUPL_TYPE_DATA_DEVICE=y
+CONFIG_BTDM_SCAN_DUPL_TYPE=2
+# Age entries out rather than letting them persist for the whole uptime.
+CONFIG_BTDM_SCAN_DUPL_CACHE_REFRESH_PERIOD=10

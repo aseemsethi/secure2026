@@ -23,13 +23,21 @@ esp_err_t send_ntfy_notification(const char *topic, const char *message);
 
 static const char *TAG = "BLE_SENSOR";
 
+/* Window equals interval: scan continuously. Anything less leaves gaps where an
+ * advertisement is missed outright, and Wi-Fi coexistence already takes airtime
+ * away from us on top of whatever duty cycle we ask for. */
 #define BLE_SCAN_INTERVAL_MS 160
-#define BLE_SCAN_WINDOW_MS 80
+#define BLE_SCAN_WINDOW_MS 160
 #define BLE_EVENT_QUEUE_DEPTH 8
 
-/* A sensor bouncing in its holder can rattle; ignore flips closer than this. */
-#define BLE_STATE_DEBOUNCE_MS 1000
+/* How often to report per-sensor advertisement counts, 0 disables. */
+#define BLE_HEALTH_REPORT_MS 60000
 
+/*
+ * The counters below are written by the NimBLE host task and read by
+ * ble_sensor_task for the health log. They are diagnostics only, so they are
+ * left unsynchronised rather than putting a lock in the advertisement path.
+ */
 typedef struct {
     uint8_t address[6];                    /*!< NimBLE order: least significant byte first */
     char text[CONFIG_SERVER_BT_ADDRESS_LENGTH];  /*!< AA:BB:CC:DD:EE:FF, for logs */
@@ -37,6 +45,10 @@ typedef struct {
     bool state_known;
     bool is_open;
     int64_t last_change_us;
+    uint32_t adv_count;                    /*!< Advertisements matched to this sensor */
+    uint32_t decode_fail_count;            /*!< Matched, but carried no door state */
+    int64_t last_seen_us;
+    int8_t last_rssi;
 } ble_sensor_t;
 
 typedef struct {
@@ -157,8 +169,17 @@ static bool decode_door_state(const uint8_t *data, uint8_t length, bool *is_open
  * Runs on the NimBLE host task, so it only matches, decodes and queues. The
  * display and the ntfy POST are left to ble_sensor_task.
  */
+static void start_scan(void);
+
 static int gap_event_handler(struct ble_gap_event *event, void *arg)
 {
+    /* Scanning is requested forever, so this means the controller stopped it. */
+    if (event->type == BLE_GAP_EVENT_DISC_COMPLETE) {
+        ESP_LOGW(TAG, "BLE scan ended (reason %d); restarting", event->disc_complete.reason);
+        start_scan();
+        return 0;
+    }
+
     if (event->type != BLE_GAP_EVENT_DISC) {
         return 0;
     }
@@ -170,11 +191,17 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
             continue;
         }
 
+        int64_t now_us = esp_timer_get_time();
+        sensor->adv_count++;
+        sensor->last_seen_us = now_us;
+        sensor->last_rssi = desc->rssi;
+
         ESP_LOGD(TAG, "%s rssi=%d len=%u", sensor->text, desc->rssi, desc->length_data);
         ESP_LOG_BUFFER_HEX_LEVEL(TAG, desc->data, desc->length_data, ESP_LOG_DEBUG);
 
         bool is_open = false;
         if (!decode_door_state(desc->data, desc->length_data, &is_open)) {
+            sensor->decode_fail_count++;
             ESP_LOGD(TAG, "%s advertisement carried no door state", sensor->text);
             return 0;
         }
@@ -182,12 +209,6 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
 
         /* Sensors re-advertise the same state continuously; report transitions. */
         if (sensor->state_known && sensor->is_open == is_open) {
-            return 0;
-        }
-
-        int64_t now_us = esp_timer_get_time();
-        if (sensor->state_known &&
-            (now_us - sensor->last_change_us) < (int64_t)BLE_STATE_DEBOUNCE_MS * 1000) {
             return 0;
         }
 
@@ -214,15 +235,47 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
 /**
  * @brief Report door transitions on the display and through ntfy.
  */
+/**
+ * @brief Log how many advertisements each sensor is actually producing.
+ *
+ * A sensor that is heard rarely, or not at all, shows up here as a low count or
+ * a long silence, which separates a range problem from a decoding problem.
+ */
+static void report_sensor_health(int64_t now_us)
+{
+    for (size_t index = 0; index < sensor_count; ++index) {
+        const ble_sensor_t *sensor = &sensors[index];
+
+        if (sensor->adv_count == 0) {
+            ESP_LOGW(TAG, "%s: no advertisements seen yet", sensor->text);
+            continue;
+        }
+
+        ESP_LOGI(TAG, "%s: %lu adv (%lu undecoded), last seen %lds ago, rssi=%d, state=%s",
+                 sensor->text, (unsigned long)sensor->adv_count,
+                 (unsigned long)sensor->decode_fail_count,
+                 (long)((now_us - sensor->last_seen_us) / 1000000),
+                 sensor->last_rssi,
+                 sensor->state_known ? (sensor->is_open ? "open" : "closed") : "unknown");
+    }
+}
+
 static void ble_sensor_task(void *argument)
 {
     ble_door_event_t door_event;
     char topic[CONFIG_SERVER_TOPIC_LENGTH];
     char line[32];
     char message[96];
+    int64_t next_report_us = esp_timer_get_time() + (int64_t)BLE_HEALTH_REPORT_MS * 1000;
 
     while (true) {
-        if (xQueueReceive(event_queue, &door_event, portMAX_DELAY) != pdTRUE) {
+        if (xQueueReceive(event_queue, &door_event,
+                          pdMS_TO_TICKS(BLE_HEALTH_REPORT_MS)) != pdTRUE) {
+            int64_t now_us = esp_timer_get_time();
+            if (now_us >= next_report_us) {
+                report_sensor_health(now_us);
+                next_report_us = now_us + (int64_t)BLE_HEALTH_REPORT_MS * 1000;
+            }
             continue;
         }
 
@@ -247,7 +300,7 @@ static void ble_sensor_task(void *argument)
     }
 }
 
-static void on_host_sync(void)
+static void start_scan(void)
 {
     uint8_t own_addr_type;
     int ret = ble_hs_id_infer_auto(0, &own_addr_type);
@@ -271,7 +324,13 @@ static void on_host_sync(void)
         return;
     }
 
-    ESP_LOGI(TAG, "BLE scan started for %u sensor(s)", (unsigned)sensor_count);
+    ESP_LOGI(TAG, "BLE scan started for %u sensor(s), %dms window / %dms interval",
+             (unsigned)sensor_count, BLE_SCAN_WINDOW_MS, BLE_SCAN_INTERVAL_MS);
+}
+
+static void on_host_sync(void)
+{
+    start_scan();
 }
 
 static void on_host_reset(int reason)
