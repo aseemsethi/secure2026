@@ -1,0 +1,23 @@
+# ESP32-S3-N16R8. I2C pins for this board are in main.c: SDA 5, SCL 4.
+
+# No classic Bluetooth on this chip, so there is no controller mode to pin.
+#
+# Central can be left off here, unlike on ESP32: the host based privacy option
+# that forces it there depends on IDF_TARGET_ESP32, so ble_hs_resolv.c compiles
+# to nothing and never references the security manager.
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+
+# Same duplicate cache trap as ESP32, different symbols: the S3 uses the C3
+# family BT_CTRL_* controller options. The default is filtering by device
+# address, which reports each sensor once and then suppresses its state changes.
+CONFIG_BT_CTRL_BLE_SCAN_DUPL=y
+CONFIG_BT_CTRL_SCAN_DUPL_TYPE_DATA_DEVICE=y
+CONFIG_BT_CTRL_SCAN_DUPL_TYPE=2
+CONFIG_BT_CTRL_DUPL_SCAN_CACHE_REFRESH_PERIOD=10
+
+# N16R8: 16MB flash, 8MB octal PSRAM.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y

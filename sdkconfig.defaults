@@ -1,32 +1,35 @@
-# NimBLE in observer-only mode, for the IM24-BLE door sensors.
-# Bluedroid is not an option here: the app partition is 1500K and the binary
-# is already ~1.08M, so only NimBLE's smaller footprint fits.
+# Settings common to every target.
+#
+# ESP-IDF also applies sdkconfig.defaults.<target> on top of this file, so the
+# per-chip Bluetooth controller and board settings live in:
+#   sdkconfig.defaults.esp32     - ESP32-WROOM-32
+#   sdkconfig.defaults.esp32s3   - ESP32-S3-N16R8
+#
+# Note that an existing sdkconfig wins over these defaults. They take effect on
+# a fresh checkout, after `idf.py set-target`, or after deleting sdkconfig.
+
+# The binary is around 1.3MB with Wi-Fi, HTTPS and BLE, so the default 1MB
+# single-app partition is not enough. This gives a 1500K app partition.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# NimBLE rather than Bluedroid: we only listen to advertisements, and Bluedroid
+# would not fit the app partition alongside Wi-Fi and HTTPS.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
-CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
-CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=n
-CONFIG_BTDM_CTRL_MODE_BTDM=n
 
-# We only listen to advertisements, so observer is the role we actually use.
-#
-# Central has to stay on regardless: on ESP32, esp_nimble_cfg.h hardcodes
-# MYNEWT_VAL_BLE_HOST_BASED_PRIVACY to 1 whatever Kconfig says, which compiles
-# ble_hs_resolv.c, which calls ble_sm_alg_encrypt from the security manager.
-# That symbol only exists when a connectable role is enabled, so an
-# observer-only build fails to link on this target.
+# Observer is the only role the application uses. Whether the connectable roles
+# can actually be turned off is target specific, so ROLE_CENTRAL is set per
+# target rather than here.
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
-CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 
 # Wi-Fi and BLE share the 2.4GHz radio.
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
 
-# The controller keeps its own duplicate cache. Filtering by device address
-# alone reports each sensor once and suppresses everything after it, which
-# swallows door state changes. Filter on address AND data so any payload change
-# is always reported.
-CONFIG_BTDM_SCAN_DUPL_TYPE_DATA_DEVICE=y
-CONFIG_BTDM_SCAN_DUPL_TYPE=2
-# Age entries out rather than letting them persist for the whole uptime.
-CONFIG_BTDM_SCAN_DUPL_CACHE_REFRESH_PERIOD=10
+# start_wifi_provisioning() uses NETWORK_PROV_SECURITY_1, which only exists when
+# protocomm security version 1 is compiled in. Its Kconfig default is now n, so
+# without this the build fails with 'NETWORK_PROV_SECURITY_1' undeclared.
+# Security 1 is deprecated in favour of Security 2 (SRP6a), which would need a
+# salt and verifier instead of the plain proof of possession.
+CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y

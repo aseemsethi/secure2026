@@ -12,7 +12,7 @@
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=c:\\esp32-projects\\i2c_u8g2\\build"
+    "--compile-commands-dir=c:\\esp32-projects\\security\\build"
   ],
   "idf.flashType": "UART",
   "idf.portWin": "COM3"

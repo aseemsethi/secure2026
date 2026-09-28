@@ -157,8 +157,6 @@ static void wifi_reconnect_task(void *argument)
 
 /* I2C Configuration (configurable via menuconfig) */
 #define I2C_MASTER_NUM    I2C_NUM_0                        /*!< I2C master port number */
-#define I2C_MASTER_SDA_IO 26
-#define I2C_MASTER_SCL_IO 25
 //#define I2C_MASTER_SDA_IO CONFIG_I2C_MASTER_SDA            /*!< GPIO number used for I2C master data  */
 //#define I2C_MASTER_SCL_IO CONFIG_I2C_MASTER_SCL            /*!< GPIO number used for I2C master clock */
 #define I2C_FREQ_HZ       CONFIG_I2C_MASTER_FREQUENCY      /*!< I2C master clock frequency */
@@ -481,6 +479,18 @@ void displayString(char* str)
  */
 void app_main(void)
 {
+#if CONFIG_IDF_TARGET_ESP32
+/* ESP32-WROOM-32 */
+#define I2C_MASTER_SDA_IO 26
+#define I2C_MASTER_SCL_IO 25
+#elif CONFIG_IDF_TARGET_ESP32S3
+/* ESP32-S3-N16R8 */
+#define I2C_MASTER_SDA_IO 5
+#define I2C_MASTER_SCL_IO 4
+#else
+#error "No I2C pins defined for this target; add them to app_main()"
+#endif
+
     esp_log_level_set("BLE_SENSOR", ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "Starting Security Dev (menuconfig based configuration)");
     ESP_LOGI(TAG, "I2C Configuration: SDA=GPIO%d, SCL=GPIO%d, Freq=%dHz, Timeout=%dms",

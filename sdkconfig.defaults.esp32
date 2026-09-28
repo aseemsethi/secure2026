@@ -1,0 +1,24 @@
+# ESP32-WROOM-32. I2C pins for this board are in main.c: SDA 26, SCL 25.
+
+# This chip has classic Bluetooth as well, so the mode has to be pinned to BLE.
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=n
+CONFIG_BTDM_CTRL_MODE_BTDM=n
+
+# Central cannot be turned off here, however unused it is. On ESP32,
+# esp_nimble_cfg.h hardcodes MYNEWT_VAL_BLE_HOST_BASED_PRIVACY to 1 whatever
+# Kconfig says, which compiles ble_hs_resolv.c, which calls ble_sm_alg_encrypt
+# from the security manager. That symbol only exists when a connectable role is
+# enabled, so an observer-only build fails to link on this target.
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+
+# The controller keeps its own duplicate cache, separate from the host's
+# filter_duplicates flag. The default (by device address) reports each sensor
+# once and suppresses everything after it, which swallows door state changes.
+# Filter on address AND data so any payload change is always reported.
+CONFIG_BTDM_BLE_SCAN_DUPL=y
+CONFIG_BTDM_SCAN_DUPL_TYPE_DATA_DEVICE=y
+CONFIG_BTDM_SCAN_DUPL_TYPE=2
+CONFIG_BTDM_SCAN_DUPL_CACHE_REFRESH_PERIOD=10
+
+CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y

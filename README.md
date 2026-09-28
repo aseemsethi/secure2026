@@ -1,5 +1,5 @@
-| Supported Targets | ESP32 |
-| ----------------- | ----- |
+| Supported Targets | ESP32 | ESP32-S3 |
+| ----------------- | ----- | -------- |
 
 # Security Dev
 
@@ -16,25 +16,27 @@ small OLED, and pushes notifications to your phone through [ntfy.sh](https://ntf
 
 ## Hardware
 
-- ESP32 development board
+- ESP32-WROOM-32 or ESP32-S3-N16R8
 - SSD1306 128x64 OLED on I2C
 - One or more IM24-BLE door sensors
 
-The I2C pins are set in [`main/main.c`](main/main.c):
+The I2C pins are chosen per target in `app_main()` in [`main/main.c`](main/main.c):
 
-| Signal | GPIO |
-| ------ | ---- |
-| SDA    | 26   |
-| SCL    | 25   |
+| Board            | SDA | SCL |
+| ---------------- | --- | --- |
+| ESP32-WROOM-32   | 26  | 25  |
+| ESP32-S3-N16R8   | 5   | 4   |
 
-These are hardcoded and currently override the `menuconfig` values, which sit
-commented out just below them. The display address and I2C frequency do still come
-from `menuconfig`.
+Adding a third chip is a compile error until you give it pins, which is deliberate.
+Note the boards cannot share pins: GPIO 25 does not exist on the S3.
+
+The display address and I2C frequency still come from `menuconfig`.
 
 ## Build and flash
 
 The toolchain lives under `C:\Espressif`, so activate it with the EIM profile script
-rather than `export.ps1`:
+rather than `export.ps1`, which looks in the wrong place and reports a missing Python
+environment:
 
 ```powershell
 & 'C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1'
@@ -42,10 +44,45 @@ idf.py build
 idf.py -p COM3 flash monitor
 ```
 
-Bluetooth settings are in [`sdkconfig.defaults`](sdkconfig.defaults). Note that
-NimBLE's central role has to stay enabled: on ESP32, `esp_nimble_cfg.h` forces host
-based privacy on regardless of Kconfig, and the resulting `ble_hs_resolv.c` needs a
-symbol that only the security manager provides. An observer-only build will not link.
+### Building for the other board
+
+Configuration is split so both targets build from the same tree:
+
+| File | Applies to |
+| ---- | ---------- |
+| [`sdkconfig.defaults`](sdkconfig.defaults) | every target |
+| [`sdkconfig.defaults.esp32`](sdkconfig.defaults.esp32) | ESP32-WROOM-32 |
+| [`sdkconfig.defaults.esp32s3`](sdkconfig.defaults.esp32s3) | ESP32-S3-N16R8 |
+
+`sdkconfig` itself is generated and not in version control, so the defaults files are
+the source of truth. An existing `sdkconfig` overrides them, so changes to defaults
+only take effect after `idf.py set-target` or deleting `sdkconfig`.
+
+To build the S3 without disturbing an existing ESP32 build, keep it out of tree:
+
+```powershell
+idf.py -B build_s3 -D SDKCONFIG=sdkconfig.s3 set-target esp32s3
+idf.py -B build_s3 -D SDKCONFIG=sdkconfig.s3 build
+```
+
+Running plain `idf.py set-target` instead would regenerate the single shared
+`sdkconfig` and discard any menuconfig tweaks not captured in the defaults files.
+
+### Bluetooth configuration traps
+
+Both were found the hard way, and both are recorded in the defaults files:
+
+- **The controller's duplicate cache is separate from the host's
+  `filter_duplicates` flag.** Its default is to filter by device address, meaning each
+  sensor is reported once and every later advertisement is suppressed, so door state
+  changes never arrive. Both targets set it to filter on address *and* data. The
+  symbols differ: ESP32 uses `BTDM_SCAN_DUPL_TYPE_*`, the S3 uses
+  `BT_CTRL_SCAN_DUPL_TYPE_*`.
+- **NimBLE's central role cannot be disabled on ESP32.** `esp_nimble_cfg.h` hardcodes
+  host based privacy on for that chip whatever Kconfig says, which compiles
+  `ble_hs_resolv.c`, which needs `ble_sm_alg_encrypt` from the security manager. That
+  only exists with a connectable role, so an observer-only build fails to link. The S3
+  has no such constraint and runs observer-only.
 
 ## First run
 
