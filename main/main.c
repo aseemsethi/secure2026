@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -12,6 +13,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_netif.h"
+#include "esp_netif_sntp.h"
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "network_provisioning/manager.h"
@@ -32,6 +34,8 @@ static const char *TAG = "U8G2";
 u8g2_t u8g2;
 static volatile bool station_connected;
 static bool station_reconnect_enabled;
+static bool sntp_started;
+static char status_line[32];   /*!< Last line drawn by displayString, replayed by clock_task */
 static TaskHandle_t reconnect_task_handle;
 static SemaphoreHandle_t display_mutex;
 
@@ -168,15 +172,40 @@ static void wifi_reconnect_task(void *argument)
 static i2c_master_bus_handle_t i2c_bus_handle = NULL;   /*!< I2C master bus handle */
 static i2c_master_dev_handle_t display_dev_handle = NULL;  /*!< Display device handle */
 
+/**
+ * @brief Write "DD/MM : HH:MM:SS" in India time into a caller supplied buffer.
+ *
+ * The timezone comes from TZ, which app_main sets to IST before anything draws.
+ * Until SNTP has synced the clock sits in 1970, so rather than showing a
+ * misleading 01/01 the placeholder is written instead.
+ *
+ * @param[out] out       Receives the timestamp, at least 18 bytes
+ * @param[in]  out_size  Size of the buffer
+ */
+static void format_timestamp(char *out, size_t out_size)
+{
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+
+    if (local.tm_year < (2024 - 1900)) {
+        snprintf(out, out_size, "--/-- : --:--:--");
+        return;
+    }
+    strftime(out, out_size, "%d/%m : %H:%M:%S", &local);
+}
+
 static void security_text_display(u8g2_t *display)
 {
-    ESP_LOGI(TAG, "Security Text Display ");
+    char stamp[20];
+    format_timestamp(stamp, sizeof(stamp));
+    ESP_LOGI(TAG, "Security Text Display %s", stamp);
 
     xSemaphoreTakeRecursive(display_mutex, portMAX_DELAY);
     u8g2_ClearBuffer(display);
-    u8g2_SetFont(display, u8g2_font_ncenB12_tr);
-    u8g2_DrawStr(display, 0, 16, "Security Dev");
+    /* ncenB08 rather than ncenB12: the 16 character stamp does not fit at 12px. */
     u8g2_SetFont(display, u8g2_font_ncenB08_tr);
+    u8g2_DrawStr(display, 0, 16, stamp);
     u8g2_DrawStr(display, 0, 32, "aseemsethi@yahoo.com");
     u8g2_SetFont(display, u8g2_font_5x7_tr);
     u8g2_DrawStr(display, 0, 44, "Sept 2026");
@@ -184,6 +213,16 @@ static void security_text_display(u8g2_t *display)
     u8g2_SendBuffer(display);
     xSemaphoreGiveRecursive(display_mutex);
     vTaskDelay(pdMS_TO_TICKS(4000));
+}
+
+/**
+ * @brief Logged when SNTP lands, so the monitor shows whether the clock is real.
+ */
+static void time_sync_callback(struct timeval *tv)
+{
+    char stamp[20];
+    format_timestamp(stamp, sizeof(stamp));
+    ESP_LOGI(TAG, "Clock synced from SNTP: %s IST", stamp);
 }
 
 static void provisioning_event_handler(void *arg, esp_event_base_t event_base,
@@ -225,7 +264,21 @@ static void provisioning_event_handler(void *arg, esp_event_base_t event_base,
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         station_connected = true;
-        displayString("Wi-Fi connected");
+
+        /* The clock is only real once SNTP has run. Start it on the first
+         * address we get; later reconnects must not re-initialise it. */
+        if (!sntp_started) {
+            esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            sntp_config.sync_cb = time_sync_callback;
+            esp_err_t sntp_ret = esp_netif_sntp_init(&sntp_config);
+            if (sntp_ret == ESP_OK) {
+                sntp_started = true;
+                ESP_LOGI(TAG, "SNTP started against pool.ntp.org");
+            } else {
+                ESP_LOGE(TAG, "Could not start SNTP: %s", esp_err_to_name(sntp_ret));
+            }
+        }
+
         const ip_event_got_ip_t *got_ip = (const ip_event_got_ip_t *)event_data;
         wifi_config_t wifi_config = {0};
         esp_err_t ret = esp_wifi_get_config(WIFI_IF_STA, &wifi_config);
@@ -257,8 +310,8 @@ static void provisioning_event_handler(void *arg, esp_event_base_t event_base,
         } else {
             connection_ip[0] = '\0';
         }
-        u8g2_DrawStr(&u8g2, 0, 28, connection_ssid);
-        u8g2_DrawStr(&u8g2, 0, 40, connection_ip);
+        /* Now that the SSID and address are known, draw the full status frame. */
+        displayString("Wi-Fi connected");
     }
     u8g2_SendBuffer(&u8g2);
     xSemaphoreGiveRecursive(display_mutex);
@@ -455,17 +508,53 @@ static uint8_t u8x8_gpio_delay_cb(u8x8_t *u8x8, uint8_t msg,
     return 1;
 }
 
-void displayString(char* str)
+/**
+ * @brief Repaint the status screen, picking up the current time.
+ *
+ * Split out from displayString so clock_task can refresh the clock without an
+ * event having to occur.
+ */
+static void draw_status_frame(void)
 {
+    char stamp[20];
+    format_timestamp(stamp, sizeof(stamp));
+
     xSemaphoreTakeRecursive(display_mutex, portMAX_DELAY);
     u8g2_ClearBuffer(&u8g2);
     u8g2_SetFont(&u8g2, u8g2_font_ncenB08_tr);
-    u8g2_DrawStr(&u8g2, 0, 16, "Security Dev");
+    u8g2_DrawStr(&u8g2, 0, 16, stamp);
     u8g2_DrawStr(&u8g2, 0, 28, connection_ssid);
     u8g2_DrawStr(&u8g2, 0, 40, connection_ip);
-    u8g2_DrawStr(&u8g2, 0, 56, str);
+    u8g2_DrawStr(&u8g2, 0, 56, status_line);
     u8g2_SendBuffer(&u8g2);
     xSemaphoreGiveRecursive(display_mutex);
+}
+
+/**
+ * @brief Keep the clock on the display moving once every second.
+ *
+ * Without this the screen only repaints on an event, so it would sit frozen on
+ * whatever the time was when the last door or Wi-Fi event happened. It stays
+ * quiet until the station is up, so provisioning messages are not overwritten.
+ */
+static void clock_task(void *argument)
+{
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (station_connected) {
+            draw_status_frame();
+        }
+    }
+}
+
+void displayString(char* str)
+{
+    xSemaphoreTakeRecursive(display_mutex, portMAX_DELAY);
+    strncpy(status_line, str != NULL ? str : "", sizeof(status_line) - 1);
+    status_line[sizeof(status_line) - 1] = '\0';
+    xSemaphoreGiveRecursive(display_mutex);
+
+    draw_status_frame();
 }
 
 /**
@@ -493,6 +582,10 @@ void app_main(void)
 
     esp_log_level_set("BLE_SENSOR", ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "Starting Security Dev (menuconfig based configuration)");
+
+    /* India Standard Time. POSIX inverts the sign, so IST-5:30 means UTC+5:30. */
+    setenv("TZ", "IST-5:30", 1);
+    tzset();
     ESP_LOGI(TAG, "I2C Configuration: SDA=GPIO%d, SCL=GPIO%d, Freq=%dHz, Timeout=%dms",
              I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO, I2C_FREQ_HZ, I2C_TIMEOUT_MS);
     ESP_LOGI(TAG, "Display Configuration: Address=0x%02X",
@@ -544,6 +637,10 @@ void app_main(void)
     security_text_display(&u8g2);
     start_wifi_provisioning();
     ESP_ERROR_CHECK(start_configuration_server());
+
+    if (xTaskCreate(clock_task, "clock", 3072, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Could not start clock task; time will only update on events");
+    }
 
     /* Door sensors are secondary: log a failure rather than halting the device. */
     esp_err_t ble_ret = start_ble_sensor_monitor();
