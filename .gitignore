@@ -35,6 +35,7 @@ sdkconfig
 # Per-target out-of-tree builds, e.g. -B build_s3 -D SDKCONFIG=sdkconfig.s3
 build_*/
 sdkconfig.s3
+sdkconfig.esp32
 
 # ESP-IDF dependencies
 # For older versions or manual component management

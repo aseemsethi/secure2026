@@ -20,6 +20,7 @@
 #include "network_provisioning/scheme_softap.h"
 #include "http_server.h"
 #include "ble_sensors.h"
+#include "mems_mic.h"
 #include "sdkconfig.h"
 #include "u8g2.h"
 
@@ -646,6 +647,11 @@ void app_main(void)
     esp_err_t ble_ret = start_ble_sensor_monitor();
     if (ble_ret != ESP_OK) {
         ESP_LOGE(TAG, "Could not start BLE sensor monitor: %s", esp_err_to_name(ble_ret));
+    }
+
+    esp_err_t mic_ret = start_mems_mic();
+    if (mic_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Could not start the microphone: %s", esp_err_to_name(mic_ret));
     }
     while(1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
