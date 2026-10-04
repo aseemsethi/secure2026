@@ -289,7 +289,18 @@ static void ble_sensor_task(void *argument)
         displayString(line);
 
         if (get_config_topic(topic, sizeof(topic)) == ESP_OK && topic[0] != '\0') {
-            snprintf(message, sizeof(message), "%s (%s) is %s", label, sensor->text, state);
+            /* Name the device that saw the event, not the sensor's MAC: the
+             * address means nothing on a phone, and the MAC is already in the
+             * log line above for diagnosis. */
+            char device_name[CONFIG_SERVER_TEXT_LENGTH];
+            if (get_config_device_name(device_name, sizeof(device_name)) == ESP_OK &&
+                device_name[0] != '\0') {
+                snprintf(message, sizeof(message), "%s (%s) is %s",
+                         label, device_name, state);
+            } else {
+                snprintf(message, sizeof(message), "%s is %s", label, state);
+            }
+
             esp_err_t ret = send_ntfy_notification(topic, message);
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Could not queue door notification: %s", esp_err_to_name(ret));

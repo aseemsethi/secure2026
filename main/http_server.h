@@ -19,6 +19,14 @@ esp_err_t start_configuration_server(void);
 esp_err_t get_config_topic(char *topic, size_t topic_size);
 
 /**
+ * @brief Read the device name set on the configuration page.
+ *
+ * @param[out] name       Receives the name, empty when it has never been set
+ * @param[in]  name_size  Size of the buffer
+ */
+esp_err_t get_config_device_name(char *name, size_t name_size);
+
+/**
  * @brief Read one configured Bluetooth sensor slot from flash.
  *
  * @param[in]  index         Slot index, 0 to CONFIG_SERVER_MAX_BT_ADDRESSES - 1

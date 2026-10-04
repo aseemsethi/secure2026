@@ -1,6 +1,7 @@
 #include "mems_mic.h"
 
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,8 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "http_server.h"
 
 /* Provided by main.c, declared here as http_server.c already does for displayString. */
 void displayString(char *str);
@@ -45,6 +48,34 @@ static const char *TAG = "MEMS_MIC";
  * before relying on it.
  */
 #define HELP_NTFY_TOPIC "help"
+
+/**
+ * @brief Compose the help alert text, naming the device that heard it.
+ *
+ * Shared by the capture path and the unsupported-target stub. With two of these
+ * devices running, an alert that does not say which one called out is useless.
+ *
+ * @param[out] out         Receives the message
+ * @param[in]  out_size    Size of the buffer
+ * @param[in]  level_dbfs  Measured level, or NULL to leave it out
+ */
+static void build_help_message(char *out, size_t out_size, const float *level_dbfs)
+{
+    char device_name[CONFIG_SERVER_TEXT_LENGTH];
+    bool named = get_config_device_name(device_name, sizeof(device_name)) == ESP_OK &&
+                 device_name[0] != '\0';
+
+    if (named && level_dbfs != NULL) {
+        snprintf(out, out_size, "Help (%s) called out at %.0f dBFS",
+                 device_name, (double)*level_dbfs);
+    } else if (named) {
+        snprintf(out, out_size, "Help (%s) called out", device_name);
+    } else if (level_dbfs != NULL) {
+        snprintf(out, out_size, "Help called out at %.0f dBFS", (double)*level_dbfs);
+    } else {
+        snprintf(out, out_size, "Help called out");
+    }
+}
 
 #if MIC_SUPPORTED
 
@@ -100,7 +131,7 @@ static void raise_help_alert(float level_dbfs)
     displayString("HELP called out");
 
     char message[96];
-    snprintf(message, sizeof(message), "Help called out (%.0f dBFS)", (double)level_dbfs);
+    build_help_message(message, sizeof(message), &level_dbfs);
 
     esp_err_t ret = send_ntfy_notification(HELP_NTFY_TOPIC, message);
     if (ret != ESP_OK) {
@@ -250,7 +281,11 @@ float mems_mic_level_dbfs(void)
 void mems_mic_trigger_help(void)
 {
     displayString("HELP called out");
-    esp_err_t ret = send_ntfy_notification(HELP_NTFY_TOPIC, "Help called out");
+
+    char message[96];
+    build_help_message(message, sizeof(message), NULL);
+
+    esp_err_t ret = send_ntfy_notification(HELP_NTFY_TOPIC, message);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Could not queue help notification: %s", esp_err_to_name(ret));
     }

@@ -448,6 +448,25 @@ esp_err_t get_config_topic(char *topic, size_t topic_size)
     return ret;
 }
 
+esp_err_t get_config_device_name(char *name, size_t name_size)
+{
+    if (name == NULL || name_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    name[0] = '\0';
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open("device_cfg", NVS_READONLY, &handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    size_t length = name_size;
+    ret = nvs_get_str(handle, "name", name, &length);
+    nvs_close(handle);
+    return ret;
+}
+
 esp_err_t get_config_bt_sensor(int index, char *address, size_t address_size,
                                char *name, size_t name_size)
 {
